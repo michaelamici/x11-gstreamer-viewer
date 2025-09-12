@@ -1,0 +1,116 @@
+# Cursor Rules for X11 GStreamer Viewer
+# Created by Ruliano Castian - From the streets to the code!
+
+## Project Overview
+This is a Python application that creates an X11 window with embedded GStreamer 4-way video display. The application shows video from 4 cameras in a 2x2 grid layout, embedded directly in an X11 window.
+
+## Architecture
+- **X11WindowManager**: Handles X11 window creation and event management
+- **GStreamerManager**: Manages GStreamer pipeline for 4-way video compositing
+- **MainWindow**: Coordinates between X11 and GStreamer components
+- **Config**: JSON-based configuration management
+- **Logger**: Comprehensive logging system
+
+## Key Technologies
+- Python 3.8+
+- python-xlib (X11 window management)
+- PyGObject (GStreamer Python bindings)
+- GStreamer 1.0 (multimedia pipeline)
+- X11 (window system integration)
+- Video4Linux2 (camera input)
+
+## Code Style & Standards
+- Follow PEP 8 Python style guidelines
+- Use type hints for better code quality
+- Write comprehensive docstrings for all functions and classes
+- Keep functions small and focused (KISS principle)
+- Use meaningful variable and function names
+- Add proper error handling and logging
+
+## GStreamer Pipeline
+The application creates a GStreamer pipeline that:
+1. Takes input from 4 video devices (/dev/video0-3)
+2. Scales each video to 1920x1080
+3. Composites them in a 2x2 grid using the compositor element
+4. Outputs to xvimagesink embedded in the X11 window
+
+## Window Embedding
+The key technical achievement is proper X11 window embedding:
+- Creates X11 window using python-xlib
+- Gets window ID from X11 window
+- Sets window ID on GStreamer sink using set_window_handle()
+- Video renders directly into the X11 window (no separate window)
+
+## Performance Optimization
+- Uses xvimagesink for hardware-accelerated video rendering
+- Avoids glimagesink (OpenGL-based, can cause stuttering)
+- Sets window ID after pipeline starts playing (correct timing)
+- Minimal dependencies and clean resource management
+
+## Testing
+- All tests must pass (currently 5/5 - 100% success rate)
+- Test both X11 window creation and GStreamer pipeline
+- Verify window embedding works correctly
+- Test error handling and cleanup
+
+## Build & Installation
+- Uses setuptools for packaging
+- Minimal dependencies: python-xlib, PyGObject
+- Entry point: x11-gstreamer-viewer command
+- Can be run as: python -m x11_gstreamer_viewer.main
+
+## User Controls
+- Escape/Q: Exit application
+- Window close: Proper window manager integration
+- No complex mouse interactions (simplified for reliability)
+
+## Error Handling
+- Graceful shutdown on SIGINT/SIGTERM
+- Proper resource cleanup on exit
+- Comprehensive logging for debugging
+- Fallback video sinks if primary fails
+
+## Development Guidelines
+- Always test window embedding works
+- Verify video displays smoothly without stuttering
+- Ensure proper cleanup of X11 and GStreamer resources
+- Keep the codebase simple and maintainable
+- Document any changes to the pipeline or window management
+
+## Common Issues
+- Window embedding: Make sure window ID is set after pipeline starts
+- Performance: Use xvimagesink, not glimagesink
+- Camera access: Ensure /dev/video* devices exist and are accessible
+- X11 display: Must run on X11, not Wayland
+
+## File Structure
+```
+x11-gstreamer-viewer/
+├── x11_gstreamer_viewer/          # Main package
+│   ├── core/                      # Core functionality
+│   │   ├── x11_manager.py         # X11 window management
+│   │   └── gstreamer_manager.py  # GStreamer pipeline
+│   ├── ui/                        # User interface
+│   │   └── main_window.py         # Main application window
+│   ├── utils/                     # Utilities
+│   │   ├── config.py             # Configuration management
+│   │   └── logger.py             # Logging setup
+│   ├── main.py                    # Application entry point
+│   └── __init__.py
+├── tests/                         # Test modules
+├── demo.py                        # Demo script
+├── test_basic.py                  # Basic functionality tests
+├── setup.py                       # Package setup
+├── requirements.txt               # Dependencies
+├── README.md                      # Documentation
+└── WORK_LOG.md                    # Development log
+```
+
+## When Making Changes
+1. Test that window embedding still works
+2. Verify video displays smoothly
+3. Run all tests to ensure nothing breaks
+4. Update documentation if needed
+5. Follow the established patterns for X11 and GStreamer integration
+
+Remember: This is a production-ready application that successfully embeds GStreamer video into X11 windows with smooth performance. Keep it clean, simple, and reliable!

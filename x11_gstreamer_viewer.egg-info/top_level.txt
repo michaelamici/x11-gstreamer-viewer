@@ -1,2 +1,0 @@
-tests
-x11_gstreamer_viewer
