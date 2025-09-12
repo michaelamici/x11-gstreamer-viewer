@@ -17,10 +17,6 @@ setup(
     install_requires=[
         "python-xlib>=0.33",
         "PyGObject>=3.44.0",
-        "gi>=1.2.0",
-        "gst-python>=1.20.0",
-        "numpy>=1.21.0",
-        "opencv-python>=4.5.0",
     ],
     extras_require={
         "dev": [

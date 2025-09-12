@@ -1,0 +1,2 @@
+[console_scripts]
+x11-gstreamer-viewer = x11_gstreamer_viewer.main:main

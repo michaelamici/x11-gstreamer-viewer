@@ -91,7 +91,7 @@ def test_gstreamer_manager():
     print("\nTesting GStreamer Manager...")
     
     try:
-        from x11_gstreamer_viewer.core.gstreamer_manager import GStreamerManager, ViewMode
+        from x11_gstreamer_viewer.core.gstreamer_manager import GStreamerManager
         
         # Test initialization
         gst_manager = GStreamerManager()
@@ -100,12 +100,6 @@ def test_gstreamer_manager():
         # Test pipeline creation (without window ID for now)
         if gst_manager.create_pipeline():
             print("✓ GStreamer pipeline created successfully")
-            
-            # Test view mode switching
-            if gst_manager.switch_view_mode(ViewMode.FOUR_WAY):
-                print("✓ View mode switching works")
-            else:
-                print("✗ View mode switching failed")
             
             # Clean up
             gst_manager.destroy_pipeline()

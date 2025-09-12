@@ -8,7 +8,6 @@ A simple demo script that shows the X11 GStreamer Viewer in action.
 
 import sys
 import os
-import time
 import logging
 
 # Add the package to Python path
@@ -48,12 +47,7 @@ def main():
         print(f"Window Geometry: {geometry}")
         print()
         print("Controls:")
-        print("  Left Click: Switch to 4-way view")
-        print("  Middle Click: Cycle through cameras")
-        print("  Right Click: Exit")
         print("  Escape/Q: Exit")
-        print("  1-4: Switch to specific camera")
-        print("  0: Switch to 4-way view")
         print()
         print("Starting video pipeline...")
         
