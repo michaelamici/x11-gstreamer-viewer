@@ -104,7 +104,8 @@ class X11WindowManager:
                 background_pixel=self.screen.black_pixel,  # Black background for video
                 event_mask=(X.ExposureMask | X.KeyPressMask | X.KeyReleaseMask | 
                            X.ButtonPressMask | X.ButtonReleaseMask | X.PointerMotionMask |
-                           X.StructureNotifyMask | X.FocusChangeMask)
+                           X.StructureNotifyMask | X.FocusChangeMask |
+                           X.EnterWindowMask | X.LeaveWindowMask)
             )
             
             # Set window properties
@@ -289,6 +290,12 @@ class X11WindowManager:
                     self._handle_key_press(event)
                 elif event.type == X.ButtonPress:
                     self._handle_button_press(event)
+                elif event.type == X.MotionNotify:
+                    self._handle_motion_notify(event)
+                elif event.type == X.EnterNotify:
+                    self._handle_enter_notify(event)
+                elif event.type == X.LeaveNotify:
+                    self._handle_leave_notify(event)
                 elif event.type == X.ClientMessage:
                     self._handle_client_message(event)
                     
@@ -344,6 +351,26 @@ class X11WindowManager:
         """Handle right mouse click."""
         logger.info(f"Right click at ({x}, {y})")
         # Implement exit logic here
+    
+    def _handle_motion_notify(self, event) -> None:
+        """Handle mouse motion events."""
+        # Call registered handler if exists
+        if X.MotionNotify in self.event_handlers:
+            self.event_handlers[X.MotionNotify](event)
+    
+    def _handle_enter_notify(self, event) -> None:
+        """Handle mouse enter window events."""
+        logger.debug("Mouse entered window")
+        # Call registered handler if exists
+        if X.EnterNotify in self.event_handlers:
+            self.event_handlers[X.EnterNotify](event)
+    
+    def _handle_leave_notify(self, event) -> None:
+        """Handle mouse leave window events."""
+        logger.debug("Mouse left window")
+        # Call registered handler if exists
+        if X.LeaveNotify in self.event_handlers:
+            self.event_handlers[X.LeaveNotify](event)
     
     def _handle_client_message(self, event) -> None:
         """Handle client message events (e.g., window close)."""

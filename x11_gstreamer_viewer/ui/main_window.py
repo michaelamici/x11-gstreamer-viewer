@@ -80,6 +80,9 @@ class MainWindow:
         # Button press handler (for click-to-cycle view)
         self.x11_manager.set_event_handler(X.ButtonPress, self._handle_button_press)
         
+        # Mouse motion handler (for FPS overlay visibility on mouse activity)
+        self.x11_manager.set_event_handler(X.MotionNotify, self._handle_mouse_motion)
+        
         # Client message handler (window close)
         self.x11_manager.set_event_handler(X.ClientMessage, self._handle_client_message)
         
@@ -226,6 +229,11 @@ class MainWindow:
         if button == 1:  # Left click
             if self.gstreamer_manager is not None:
                 self.gstreamer_manager.cycle_view()
+    
+    def _handle_mouse_motion(self, event) -> None:
+        """Handle mouse motion events - show overlay and reset idle timer."""
+        if self.gstreamer_manager is not None:
+            self.gstreamer_manager.on_mouse_activity()
     
     def _handle_client_message(self, event) -> None:
         """Handle client message events (window close)."""

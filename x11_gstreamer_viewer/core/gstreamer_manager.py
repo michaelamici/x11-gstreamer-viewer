@@ -7,8 +7,10 @@ Manages GStreamer pipeline for 4-way video viewing.
 """
 
 import logging
+import time
 import gi
-from typing import Optional, List
+from typing import Optional, List, Dict
+from threading import Lock, Timer
 
 # GStreamer imports
 gi.require_version('Gst', '1.0')
@@ -41,6 +43,22 @@ class GStreamerManager:
         self.current_view = -1
         self.compositor_sink_pads: List[Gst.Pad] = []
         
+        # FPS tracking
+        self.fps_overlays: Dict[int, Gst.Element] = {}  # Store textoverlay elements by camera index
+        self.fps_values: Dict[int, float] = {0: 0.0, 1: 0.0, 2: 0.0, 3: 0.0}  # Current FPS per camera
+        self.fps_frame_counts: Dict[int, int] = {0: 0, 1: 0, 2: 0, 3: 0}  # Frame counts
+        self.fps_last_update: Dict[int, float] = {0: 0.0, 1: 0.0, 2: 0.0, 3: 0.0}  # Last update time
+        self.fps_lock = Lock()  # Thread safety for FPS updates
+        
+        # Latency tracking
+        self.latency_values: Dict[int, float] = {0: 0.0, 1: 0.0, 2: 0.0, 3: 0.0}  # Current latency per camera (ms)
+        self.latency_buffer_times: Dict[int, List[float]] = {0: [], 1: [], 2: [], 3: []}  # Recent latency measurements (ms)
+        
+        # FPS overlay visibility
+        self.fps_overlay_visible = False  # Track overlay visibility state
+        self.fps_hide_timer: Optional[Timer] = None  # Timer for auto-hiding overlay
+        self.fps_idle_timeout = 3.0  # Hide overlay after 3 seconds of inactivity
+        
         # Initialize GStreamer
         self._init_gstreamer()
         
@@ -71,6 +89,16 @@ class GStreamerManager:
             # Reset view state
             self.current_view = -1
             self.compositor_sink_pads = []
+            
+            # Reset FPS tracking
+            self.fps_overlays = {}
+            self.fps_values = {0: 0.0, 1: 0.0, 2: 0.0, 3: 0.0}
+            self.fps_frame_counts = {0: 0, 1: 0, 2: 0, 3: 0}
+            self.fps_last_update = {0: 0.0, 1: 0.0, 2: 0.0, 3: 0.0}
+            
+            # Reset latency tracking
+            self.latency_values = {0: 0.0, 1: 0.0, 2: 0.0, 3: 0.0}
+            self.latency_buffer_times = {0: [], 1: [], 2: [], 3: []}
             
             # Create pipeline
             self.pipeline = Gst.Pipeline.new("video-viewer-pipeline")
@@ -126,9 +154,15 @@ class GStreamerManager:
                 scale = Gst.ElementFactory.make("videoscale", f"scale_{i}")
                 caps = Gst.ElementFactory.make("capsfilter", f"caps_{i}")
                 
+                # Create text overlay for FPS display
+                textoverlay = Gst.ElementFactory.make("textoverlay", f"textoverlay_{i}")
+                
                 if not all([src, convert, scale, caps]):
                     logger.warning(f"Could not create elements for device {device}")
                     continue
+                
+                if textoverlay is None:
+                    logger.warning(f"Could not create textoverlay element for device {device}, FPS display disabled")
                 
                 # Set properties
                 src.set_property("device", device)
@@ -143,26 +177,61 @@ class GStreamerManager:
                 caps_str = f"video/x-raw,width={self.video_width},height={self.video_height},framerate=30/1"
                 caps.set_property("caps", Gst.caps_from_string(caps_str))
                 
-                # Add to pipeline
-                for element in [src, convert, scale, caps]:
-                    self.pipeline.add(element)
+                # Configure text overlay for FPS and latency display
+                if textoverlay is not None:
+                    textoverlay.set_property("text", "0.0 FPS | 0.0ms")
+                    textoverlay.set_property("valignment", 2)  # Bottom alignment
+                    textoverlay.set_property("halignment", 0)  # Left alignment
+                    textoverlay.set_property("xpos", 10)  # 10 pixels from left
+                    # Position at bottom: video_height - offset (accounting for text height ~30px)
+                    textoverlay.set_property("ypos", self.video_height - 40)  # 40 pixels from bottom
+                    textoverlay.set_property("font-desc", "Sans, 12")  # Font size (half of 24)
+                    textoverlay.set_property("color", 0xFFFFFFFF)  # White text
+                    textoverlay.set_property("draw-outline", True)  # Enable outline
+                    textoverlay.set_property("outline-color", 0x000000FF)  # Black outline
+                    self.fps_overlays[i] = textoverlay
                 
-                # Link elements
+                # Add to pipeline
+                elements_to_add = [src, convert, scale, caps]
+                if textoverlay is not None:
+                    elements_to_add.append(textoverlay)
+                
+                for element in elements_to_add:
+                    if element is not None:
+                        self.pipeline.add(element)
+                
+                # Link elements: src -> convert -> scale -> caps -> textoverlay -> compositor
                 src.link(convert)
                 convert.link(scale)
                 scale.link(caps)
                 
-                # Link to compositor sink
-                sink_pad = compositor.get_request_pad(f"sink_{i}")
-                if sink_pad:
-                    caps_pad = caps.get_static_pad("src")
-                    if caps_pad:
-                        caps_pad.link(sink_pad)
-                        # Set compositor sink properties
-                        self._set_compositor_sink_properties(sink_pad, i)
-                        # Store sink pad for view switching
-                        self.compositor_sink_pads.append(sink_pad)
-                        logger.info(f"Created and linked video source {i} for device {device}")
+                if textoverlay is not None:
+                    caps.link(textoverlay)
+                    # Set up FPS measurement using pad probe on caps output
+                    self._setup_fps_measurement(caps, i)
+                    # Link textoverlay to compositor
+                    sink_pad = compositor.get_request_pad(f"sink_{i}")
+                    if sink_pad:
+                        textoverlay_pad = textoverlay.get_static_pad("src")
+                        if textoverlay_pad:
+                            textoverlay_pad.link(sink_pad)
+                            # Set compositor sink properties
+                            self._set_compositor_sink_properties(sink_pad, i)
+                            # Store sink pad for view switching
+                            self.compositor_sink_pads.append(sink_pad)
+                            logger.info(f"Created and linked video source {i} for device {device} with FPS display")
+                else:
+                    # Fallback: link caps directly to compositor if textoverlay not available
+                    sink_pad = compositor.get_request_pad(f"sink_{i}")
+                    if sink_pad:
+                        caps_pad = caps.get_static_pad("src")
+                        if caps_pad:
+                            caps_pad.link(sink_pad)
+                            # Set compositor sink properties
+                            self._set_compositor_sink_properties(sink_pad, i)
+                            # Store sink pad for view switching
+                            self.compositor_sink_pads.append(sink_pad)
+                            logger.info(f"Created and linked video source {i} for device {device}")
                 
             except Exception as e:
                 logger.error(f"Failed to create video source {i}: {e}")
@@ -249,6 +318,175 @@ class GStreamerManager:
                     sink_pad.set_property("alpha", 0.0)
         except Exception as e:
             logger.error(f"Failed to set single camera view: {e}")
+    
+    def _setup_fps_measurement(self, caps_element: Gst.Element, camera_index: int) -> None:
+        """Set up FPS measurement using pad probe on caps element output."""
+        try:
+            # Get the src pad of the caps element
+            src_pad = caps_element.get_static_pad("src")
+            if src_pad is None:
+                logger.warning(f"Could not get src pad for caps element {camera_index}")
+                return
+            
+            # Initialize FPS tracking for this camera
+            self.fps_last_update[camera_index] = time.time()
+            
+            # Add pad probe to count frames
+            src_pad.add_probe(
+                Gst.PadProbeType.BUFFER,
+                self._fps_probe_callback,
+                camera_index
+            )
+            
+            logger.debug(f"Set up FPS measurement for camera {camera_index}")
+        except Exception as e:
+            logger.error(f"Failed to set up FPS measurement for camera {camera_index}: {e}")
+    
+    def _fps_probe_callback(self, pad: Gst.Pad, info: Gst.PadProbeInfo, user_data) -> int:
+        """Callback for pad probe to count frames, calculate FPS, and measure latency."""
+        camera_index = user_data
+        try:
+            current_time = time.time()
+            buffer = info.get_buffer()
+            
+            with self.fps_lock:
+                self.fps_frame_counts[camera_index] += 1
+                
+                # Measure latency using buffer timestamps
+                if buffer is not None:
+                    # Get buffer PTS (presentation timestamp) - when frame should be displayed
+                    pts = buffer.pts
+                    if pts != Gst.CLOCK_TIME_NONE and self.pipeline is not None:
+                        # Get pipeline clock time
+                        clock = self.pipeline.get_clock()
+                        if clock is not None:
+                            base_time = self.pipeline.get_base_time()
+                            clock_time = clock.get_time() - base_time
+                            
+                            # Calculate latency: difference between when frame should be displayed and now
+                            # If PTS is in the past, that's latency
+                            latency_ns = clock_time - pts
+                            if latency_ns > 0:
+                                latency_ms = latency_ns / Gst.MSECOND
+                                
+                                # Keep running average of last 10 measurements
+                                self.latency_buffer_times[camera_index].append(latency_ms)
+                                if len(self.latency_buffer_times[camera_index]) > 10:
+                                    self.latency_buffer_times[camera_index].pop(0)
+                                
+                                # Calculate average latency
+                                if len(self.latency_buffer_times[camera_index]) > 0:
+                                    avg_latency = sum(self.latency_buffer_times[camera_index]) / len(self.latency_buffer_times[camera_index])
+                                    self.latency_values[camera_index] = avg_latency
+                    else:
+                        # Fallback: measure frame interval as latency approximation
+                        # Estimate based on FPS: if 30fps, ideal interval is 33.3ms
+                        estimated_interval = 1000.0 / max(self.fps_values.get(camera_index, 30.0), 1.0)
+                        self.latency_buffer_times[camera_index].append(estimated_interval)
+                        if len(self.latency_buffer_times[camera_index]) > 10:
+                            self.latency_buffer_times[camera_index].pop(0)
+                        
+                        if len(self.latency_buffer_times[camera_index]) > 0:
+                            avg_latency = sum(self.latency_buffer_times[camera_index]) / len(self.latency_buffer_times[camera_index])
+                            self.latency_values[camera_index] = avg_latency
+                
+                # Update FPS every second
+                if current_time - self.fps_last_update[camera_index] >= 1.0:
+                    elapsed = current_time - self.fps_last_update[camera_index]
+                    if elapsed > 0:
+                        self.fps_values[camera_index] = self.fps_frame_counts[camera_index] / elapsed
+                        self.fps_frame_counts[camera_index] = 0
+                        self.fps_last_update[camera_index] = current_time
+                        
+                        # Update text overlay
+                        self._update_fps_display(camera_index)
+        except Exception as e:
+            logger.debug(f"Error in FPS probe callback for camera {camera_index}: {e}")
+        
+        return Gst.PadProbeReturn.OK
+    
+    def _update_fps_display(self, camera_index: int) -> None:
+        """Update the text overlay with current FPS and latency values."""
+        try:
+            if camera_index not in self.fps_overlays:
+                return
+            
+            textoverlay = self.fps_overlays[camera_index]
+            fps_value = self.fps_values.get(camera_index, 0.0)
+            latency_value = self.latency_values.get(camera_index, 0.0)
+            
+            # Format text: "FPS | latency" (only if overlay is visible)
+            if self.fps_overlay_visible:
+                display_text = f"{fps_value:.1f} FPS | {latency_value:.1f}ms"
+            else:
+                display_text = ""  # Hide text when mouse not hovering
+            
+            # Update text overlay (use GObject property setting)
+            textoverlay.set_property("text", display_text)
+            
+        except Exception as e:
+            logger.debug(f"Error updating FPS display for camera {camera_index}: {e}")
+    
+    def show_fps_overlay(self) -> None:
+        """Show FPS overlay on all cameras."""
+        try:
+            # Cancel any existing hide timer
+            self._cancel_hide_timer()
+            
+            self.fps_overlay_visible = True
+            # Update all overlays immediately
+            for camera_index in self.fps_overlays.keys():
+                self._update_fps_display(camera_index)
+            logger.debug("FPS overlay shown")
+        except Exception as e:
+            logger.error(f"Error showing FPS overlay: {e}")
+    
+    def hide_fps_overlay(self) -> None:
+        """Hide FPS overlay on all cameras."""
+        try:
+            self._cancel_hide_timer()
+            self.fps_overlay_visible = False
+            # Clear all overlays immediately
+            for camera_index in self.fps_overlays.keys():
+                if camera_index in self.fps_overlays:
+                    textoverlay = self.fps_overlays[camera_index]
+                    textoverlay.set_property("text", "")
+            logger.debug("FPS overlay hidden")
+        except Exception as e:
+            logger.error(f"Error hiding FPS overlay: {e}")
+    
+    def _cancel_hide_timer(self) -> None:
+        """Cancel the auto-hide timer if it exists."""
+        try:
+            if self.fps_hide_timer is not None:
+                self.fps_hide_timer.cancel()
+                self.fps_hide_timer = None
+        except Exception as e:
+            logger.debug(f"Error canceling hide timer: {e}")
+    
+    def _schedule_hide_overlay(self) -> None:
+        """Schedule hiding the overlay after idle timeout."""
+        try:
+            # Cancel existing timer
+            self._cancel_hide_timer()
+            
+            # Create new timer to hide overlay after timeout
+            self.fps_hide_timer = Timer(self.fps_idle_timeout, self.hide_fps_overlay)
+            self.fps_hide_timer.daemon = True  # Allow program to exit even if timer is running
+            self.fps_hide_timer.start()
+            logger.debug(f"Scheduled FPS overlay hide after {self.fps_idle_timeout} seconds")
+        except Exception as e:
+            logger.error(f"Error scheduling hide timer: {e}")
+    
+    def on_mouse_activity(self) -> None:
+        """Called when mouse activity is detected - show overlay and reset timer."""
+        try:
+            # Show overlay immediately
+            self.show_fps_overlay()
+            # Schedule auto-hide after timeout
+            self._schedule_hide_overlay()
+        except Exception as e:
+            logger.error(f"Error handling mouse activity: {e}")
     
     def _create_video_sink(self, window_id: Optional[int] = None) -> Gst.Element:
         """Create the video sink element."""
@@ -400,6 +638,8 @@ class GStreamerManager:
     def close(self) -> None:
         """Close the GStreamer manager and cleanup resources."""
         try:
+            # Cancel any pending timers
+            self._cancel_hide_timer()
             self.destroy_pipeline()
             logger.info("GStreamer manager closed")
         except Exception as e:
