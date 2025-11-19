@@ -507,14 +507,14 @@ class GStreamerManager:
             else:
                 logger.info("Created xvimagesink for window embedding")
             
-            # Configure sink for low latency
+            # Configure sink for VSYNC synchronization
             try:
-                # Disable sync to clock for real-time display (reduces buffering)
-                sink.set_property("sync", False)
+                # Enable sync to clock for smooth display (syncs with display refresh)
+                sink.set_property("sync", True)
                 # Drop late frames instead of queuing them
                 sink.set_property("max-lateness", -1)
                 sink.set_property("drop-on-lateness", True)
-                logger.debug("Configured sink for low latency")
+                logger.debug("Configured sink for VSYNC synchronization")
             except Exception as e:
                 logger.debug(f"Could not set all latency properties: {e}")
             
