@@ -169,57 +169,11 @@ class X11WindowManager:
             # Flush display
             self.dpy.flush()
             
-            # Wait for MapNotify event to ensure window is ready for embedding
-            self._wait_for_map_notify()
-            
             logger.info(f"Created window: {width}x{height} at ({x}, {y})")
             return True
             
         except Exception as e:
             logger.error(f"Failed to create window: {e}")
-            return False
-    
-    def _wait_for_map_notify(self, timeout: float = 5.0) -> bool:
-        """
-        Wait for MapNotify event to ensure window is ready for embedding.
-        
-        Args:
-            timeout: Maximum time to wait in seconds
-            
-        Returns:
-            True if MapNotify received, False if timeout
-        """
-        if self.window is None or self.dpy is None:
-            return False
-        
-        import time
-        start_time = time.time()
-        
-        try:
-            # Process events until we get MapNotify for our window
-            while time.time() - start_time < timeout:
-                if self.dpy.pending_events():
-                    event = self.dpy.next_event()
-                    # Check if this is a MapNotify event for our window
-                    if event.type == X.MapNotify:
-                        # MapNotify event has 'window' attribute pointing to the mapped window
-                        if hasattr(event, 'window') and event.window == self.window:
-                            logger.debug("Received MapNotify event, window is ready")
-                            return True
-                        # Also check event.event (some X11 implementations use this)
-                        elif hasattr(event, 'event') and event.event == self.window:
-                            logger.debug("Received MapNotify event, window is ready")
-                            return True
-                else:
-                    # Small sleep to avoid busy waiting
-                    time.sleep(0.01)
-            
-            logger.warning(f"Timeout waiting for MapNotify event after {timeout}s")
-            return False
-            
-        except Exception as e:
-            logger.debug(f"Error waiting for MapNotify: {e}")
-            # Don't fail completely, window might still work
             return False
     
     def destroy_window(self) -> None:
@@ -408,12 +362,18 @@ class X11WindowManager:
         logger.info("Starting X11 event loop...")
         
         try:
+            sync_counter = 0
             while self.running:
                 self.handle_events()
                 self.dpy.flush()
                 
-                # Small delay to prevent excessive CPU usage
-                self.dpy.sync()
+                # Sync only occasionally to reduce latency (every 10 iterations)
+                # flush() sends requests immediately, sync() waits for replies
+                # For low latency, we don't need to wait for X server replies every iteration
+                sync_counter += 1
+                if sync_counter >= 10:
+                    self.dpy.sync()
+                    sync_counter = 0
                 
         except KeyboardInterrupt:
             logger.info("Event loop interrupted by user")

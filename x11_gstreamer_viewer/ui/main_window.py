@@ -77,6 +77,9 @@ class MainWindow:
         # Key press handler
         self.x11_manager.set_event_handler(X.KeyPress, self._handle_key_press)
         
+        # Button press handler (for click-to-cycle view)
+        self.x11_manager.set_event_handler(X.ButtonPress, self._handle_button_press)
+        
         # Client message handler (window close)
         self.x11_manager.set_event_handler(X.ClientMessage, self._handle_client_message)
         
@@ -216,6 +219,13 @@ class MainWindow:
                 
         except Exception as e:
             logger.error(f"Error handling key press: {e}")
+    
+    def _handle_button_press(self, event) -> None:
+        """Handle mouse button press events."""
+        button = event.detail
+        if button == 1:  # Left click
+            if self.gstreamer_manager is not None:
+                self.gstreamer_manager.cycle_view()
     
     def _handle_client_message(self, event) -> None:
         """Handle client message events (window close)."""

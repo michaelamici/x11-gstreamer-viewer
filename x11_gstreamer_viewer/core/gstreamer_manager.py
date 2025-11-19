@@ -37,6 +37,10 @@ class GStreamerManager:
         # Video devices
         self.video_devices = ["/dev/video0", "/dev/video1", "/dev/video2", "/dev/video3"]
         
+        # View state tracking (-1 = tiled, 0-3 = single camera)
+        self.current_view = -1
+        self.compositor_sink_pads: List[Gst.Pad] = []
+        
         # Initialize GStreamer
         self._init_gstreamer()
         
@@ -64,6 +68,10 @@ class GStreamerManager:
                 logger.warning("Pipeline already exists, destroying it first")
                 self.destroy_pipeline()
             
+            # Reset view state
+            self.current_view = -1
+            self.compositor_sink_pads = []
+            
             # Create pipeline
             self.pipeline = Gst.Pipeline.new("video-viewer-pipeline")
             
@@ -82,8 +90,23 @@ class GStreamerManager:
             # Create video sources and link them
             self._create_and_link_sources(compositor)
             
-            # Link compositor to sink
-            compositor.link(sink)
+            # Add explicit caps after compositor for better format negotiation
+            output_caps = Gst.ElementFactory.make("capsfilter", "output_caps")
+            if output_caps is not None:
+                # Compositor output is 2x2 grid: width*2 x height*2
+                output_width = self.video_width * 2
+                output_height = self.video_height * 2
+                caps_str = f"video/x-raw,width={output_width},height={output_height},framerate=30/1"
+                output_caps.set_property("caps", Gst.caps_from_string(caps_str))
+                self.pipeline.add(output_caps)
+                # Link: compositor -> output_caps -> convert -> sink
+                compositor.link(output_caps)
+                output_caps.link(sink)
+                logger.debug(f"Added explicit output caps: {output_width}x{output_height}")
+            else:
+                # Fallback: link compositor directly to sink
+                compositor.link(sink)
+                logger.debug("Could not create output caps filter, linking compositor directly")
             
             
             logger.info("GStreamer pipeline created successfully")
@@ -109,7 +132,15 @@ class GStreamerManager:
                 
                 # Set properties
                 src.set_property("device", device)
-                caps_str = f"video/x-raw,width={self.video_width},height={self.video_height}"
+                # Configure v4l2src for low latency
+                try:
+                    src.set_property("do-timestamp", True)  # Use timestamps from device
+                    logger.debug(f"Configured v4l2src {i} for low latency")
+                except Exception as e:
+                    logger.debug(f"Could not set do-timestamp on v4l2src {i}: {e}")
+                
+                # Add framerate to caps for better format negotiation
+                caps_str = f"video/x-raw,width={self.video_width},height={self.video_height},framerate=30/1"
                 caps.set_property("caps", Gst.caps_from_string(caps_str))
                 
                 # Add to pipeline
@@ -129,6 +160,8 @@ class GStreamerManager:
                         caps_pad.link(sink_pad)
                         # Set compositor sink properties
                         self._set_compositor_sink_properties(sink_pad, i)
+                        # Store sink pad for view switching
+                        self.compositor_sink_pads.append(sink_pad)
                         logger.info(f"Created and linked video source {i} for device {device}")
                 
             except Exception as e:
@@ -152,8 +185,70 @@ class GStreamerManager:
             
             sink_pad.set_property("width", self.video_width)
             sink_pad.set_property("height", self.video_height)
+            sink_pad.set_property("alpha", 1.0)
         except Exception as e:
             logger.debug(f"Could not set compositor sink {index} properties: {e}")
+    
+    def cycle_view(self) -> None:
+        """Cycle through views: Tiled ? Camera 0 ? Camera 1 ? Camera 2 ? Camera 3 ? Tiled."""
+        try:
+            if not self.compositor_sink_pads:
+                logger.warning("No compositor sink pads available for view switching")
+                return
+            
+            output_width = self.video_width * 2
+            output_height = self.video_height * 2
+            
+            self.current_view += 1
+            if self.current_view > 3:
+                self.current_view = -1
+            
+            if self.current_view == -1:
+                self._set_tiled_view(output_width, output_height)
+                logger.info("Switched to tiled view (4-way split)")
+            else:
+                self._set_single_camera_view(self.current_view, output_width, output_height)
+                logger.info(f"Switched to single camera view: Camera {self.current_view}")
+        except Exception as e:
+            logger.error(f"Failed to cycle view: {e}")
+
+    def _set_tiled_view(self, output_width: int, output_height: int) -> None:
+        """Set compositor to show all cameras in tiled (2x2) view."""
+        try:
+            for i, sink_pad in enumerate(self.compositor_sink_pads):
+                if i == 0:
+                    sink_pad.set_property("xpos", 0)
+                    sink_pad.set_property("ypos", 0)
+                elif i == 1:
+                    sink_pad.set_property("xpos", self.video_width)
+                    sink_pad.set_property("ypos", 0)
+                elif i == 2:
+                    sink_pad.set_property("xpos", 0)
+                    sink_pad.set_property("ypos", self.video_height)
+                elif i == 3:
+                    sink_pad.set_property("xpos", self.video_width)
+                    sink_pad.set_property("ypos", self.video_height)
+                
+                sink_pad.set_property("width", self.video_width)
+                sink_pad.set_property("height", self.video_height)
+                sink_pad.set_property("alpha", 1.0)
+        except Exception as e:
+            logger.error(f"Failed to set tiled view: {e}")
+
+    def _set_single_camera_view(self, camera_index: int, output_width: int, output_height: int) -> None:
+        """Set compositor to show single camera fullscreen."""
+        try:
+            for i, sink_pad in enumerate(self.compositor_sink_pads):
+                if i == camera_index:
+                    sink_pad.set_property("xpos", 0)
+                    sink_pad.set_property("ypos", 0)
+                    sink_pad.set_property("width", output_width)
+                    sink_pad.set_property("height", output_height)
+                    sink_pad.set_property("alpha", 1.0)
+                else:
+                    sink_pad.set_property("alpha", 0.0)
+        except Exception as e:
+            logger.error(f"Failed to set single camera view: {e}")
     
     def _create_video_sink(self, window_id: Optional[int] = None) -> Gst.Element:
         """Create the video sink element."""
@@ -173,6 +268,17 @@ class GStreamerManager:
                 logger.info("Created ximagesink for window embedding")
             else:
                 logger.info("Created xvimagesink for window embedding")
+            
+            # Configure sink for low latency
+            try:
+                # Disable sync to clock for real-time display (reduces buffering)
+                sink.set_property("sync", False)
+                # Drop late frames instead of queuing them
+                sink.set_property("max-lateness", -1)
+                sink.set_property("drop-on-lateness", True)
+                logger.debug("Configured sink for low latency")
+            except Exception as e:
+                logger.debug(f"Could not set all latency properties: {e}")
             
             # Store window ID for later setting
             self.window_id = window_id
