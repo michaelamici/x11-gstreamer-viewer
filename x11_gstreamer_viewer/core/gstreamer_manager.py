@@ -222,16 +222,26 @@ class GStreamerManager:
                 logger.warning("Could not find video sink element")
                 return
             
-            # Try overlay interface first (most reliable for X11 embedding)
+            # Use VideoOverlay interface (standard way for X11 embedding)
+            try:
+                # Try to use VideoOverlay interface (xvimagesink implements this)
+                overlay = GstVideo.VideoOverlay.cast(sink_element)
+                overlay.set_window_handle(self.window_id)
+                logger.info(f"Set window handle to {self.window_id} using VideoOverlay interface")
+                return
+            except (AttributeError, TypeError, Exception) as e:
+                logger.debug(f"Could not use VideoOverlay interface: {e}")
+            
+            # Fallback: Try direct method call (some sinks implement this directly)
             try:
                 if hasattr(sink_element, 'set_window_handle'):
                     sink_element.set_window_handle(self.window_id)
-                    logger.info(f"Set window handle to {self.window_id}")
+                    logger.info(f"Set window handle to {self.window_id} using direct method")
                     return
             except Exception as e:
-                logger.debug(f"Could not set window handle: {e}")
+                logger.debug(f"Could not set window handle directly: {e}")
             
-            # Fallback to property setting
+            # Fallback: Property setting
             window_properties = ["window-id", "xid", "xwindow-id", "window"]
             for prop_name in window_properties:
                 try:

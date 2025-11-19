@@ -97,6 +97,20 @@ class MainWindow:
                 logger.error("X11 manager not initialized")
                 return False
             
+            # Validate window size matches compositor output size
+            # Compositor creates 2x2 grid: width = video_width * 2, height = video_height * 2
+            expected_width = self.gstreamer_manager.video_width * 2
+            expected_height = self.gstreamer_manager.video_height * 2
+            
+            if self.width != expected_width or self.height != expected_height:
+                logger.warning(
+                    f"Window size ({self.width}x{self.height}) doesn't match compositor output "
+                    f"({expected_width}x{expected_height}). Video may not display correctly."
+                )
+                logger.info(f"Adjusting window size to match compositor output")
+                self.width = expected_width
+                self.height = expected_height
+            
             # Create X11 window
             if not self.x11_manager.create_window(
                 width=self.width,

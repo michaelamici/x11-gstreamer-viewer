@@ -101,7 +101,7 @@ class X11WindowManager:
                 self.screen.root_depth,
                 X.CopyFromParent,
                 X.CopyFromParent,
-                background_pixel=self.screen.white_pixel,
+                background_pixel=self.screen.black_pixel,  # Black background for video
                 event_mask=(X.ExposureMask | X.KeyPressMask | X.KeyReleaseMask | 
                            X.ButtonPressMask | X.ButtonReleaseMask | X.PointerMotionMask |
                            X.StructureNotifyMask | X.FocusChangeMask)
@@ -159,8 +159,8 @@ class X11WindowManager:
             
             # Create graphics context
             self.gc = self.window.create_gc(
-                foreground=self.screen.black_pixel,
-                background=self.screen.white_pixel
+                foreground=self.screen.white_pixel,
+                background=self.screen.black_pixel  # Match window background
             )
             
             # Map window
@@ -169,11 +169,57 @@ class X11WindowManager:
             # Flush display
             self.dpy.flush()
             
+            # Wait for MapNotify event to ensure window is ready for embedding
+            self._wait_for_map_notify()
+            
             logger.info(f"Created window: {width}x{height} at ({x}, {y})")
             return True
             
         except Exception as e:
             logger.error(f"Failed to create window: {e}")
+            return False
+    
+    def _wait_for_map_notify(self, timeout: float = 5.0) -> bool:
+        """
+        Wait for MapNotify event to ensure window is ready for embedding.
+        
+        Args:
+            timeout: Maximum time to wait in seconds
+            
+        Returns:
+            True if MapNotify received, False if timeout
+        """
+        if self.window is None or self.dpy is None:
+            return False
+        
+        import time
+        start_time = time.time()
+        
+        try:
+            # Process events until we get MapNotify for our window
+            while time.time() - start_time < timeout:
+                if self.dpy.pending_events():
+                    event = self.dpy.next_event()
+                    # Check if this is a MapNotify event for our window
+                    if event.type == X.MapNotify:
+                        # MapNotify event has 'window' attribute pointing to the mapped window
+                        if hasattr(event, 'window') and event.window == self.window:
+                            logger.debug("Received MapNotify event, window is ready")
+                            return True
+                        # Also check event.event (some X11 implementations use this)
+                        elif hasattr(event, 'event') and event.event == self.window:
+                            logger.debug("Received MapNotify event, window is ready")
+                            return True
+                else:
+                    # Small sleep to avoid busy waiting
+                    time.sleep(0.01)
+            
+            logger.warning(f"Timeout waiting for MapNotify event after {timeout}s")
+            return False
+            
+        except Exception as e:
+            logger.debug(f"Error waiting for MapNotify: {e}")
+            # Don't fail completely, window might still work
             return False
     
     def destroy_window(self) -> None:
